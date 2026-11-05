@@ -1,0 +1,33 @@
+-- Rollback-only client-scope smoke test. Every result must be true.
+begin;
+create temporary table external_users (label text, id uuid);
+create temporary table external_orgs (organization_id uuid);
+create temporary table external_projects (label text, project_id uuid, organization_id uuid);
+create temporary table external_results (check_name text, passed boolean);
+insert into external_users select 'owner', public.uuid_v7() union all select 'client', public.uuid_v7();
+insert into auth.users (id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
+select id, 'authenticated', 'authenticated', 'external-' || label || '-' || id::text || '@example.com', '', now(), '{"provider":"email"}'::jsonb, '{}'::jsonb, now(), now() from external_users;
+grant select on external_users, external_orgs, external_projects to authenticated;
+grant select, insert on external_orgs, external_projects, external_results to authenticated;
+set local role authenticated;
+select set_config('request.jwt.claims', (select json_build_object('sub', id::text, 'role', 'authenticated')::text from external_users where label = 'owner'), true);
+insert into external_orgs select o.id from public.create_organization('External Scope Org', 'external-scope-org') o;
+insert into external_projects select 'shared', p.id, p.organization_id from public.create_project('Shared project', 'SHARED-1', null, null, null, 'client_visible') p;
+insert into external_projects select 'internal', p.id, p.organization_id from public.create_project('Internal project', 'INTERNAL-1') p;
+reset role;
+insert into public.organization_members (organization_id, user_id, role) select organization_id, id, 'client' from external_orgs cross join external_users where label = 'client';
+insert into public.project_members (organization_id, project_id, member_id) select p.organization_id, p.project_id, om.id from external_projects p join public.organization_members om on om.organization_id = p.organization_id join external_users u on u.id = om.user_id and u.label = 'client' where p.label = 'shared';
+insert into public.tasks (organization_id, project_id, title, assignee_id, visibility) select p.organization_id, p.project_id, 'Shared task', om.id, 'client_visible' from external_projects p join public.organization_members om on om.organization_id = p.organization_id join external_users u on u.id = om.user_id and u.label = 'owner' where p.label = 'shared';
+insert into public.tasks (organization_id, project_id, title, assignee_id, visibility) select p.organization_id, p.project_id, 'Internal task', om.id, 'internal' from external_projects p join public.organization_members om on om.organization_id = p.organization_id join external_users u on u.id = om.user_id and u.label = 'owner' where p.label = 'shared';
+insert into public.files (organization_id, project_id, owner_id, name, review_status, confidentiality) select p.organization_id, p.project_id, om.id, 'Approved shared.pdf', 'approved', 'client_shared' from external_projects p join public.organization_members om on om.organization_id = p.organization_id join external_users u on u.id = om.user_id and u.label = 'owner' where p.label = 'shared';
+insert into public.files (organization_id, project_id, owner_id, name, review_status, confidentiality) select p.organization_id, p.project_id, om.id, 'Internal draft.pdf', 'draft', 'internal' from external_projects p join public.organization_members om on om.organization_id = p.organization_id join external_users u on u.id = om.user_id and u.label = 'owner' where p.label = 'shared';
+set local role authenticated;
+select set_config('request.jwt.claims', (select json_build_object('sub', id::text, 'role', 'authenticated')::text from external_users where label = 'client'), true);
+insert into external_results select 'Client has no CRM contact access', (select count(*) = 0 from public.contacts);
+insert into external_results select 'Client sees only own membership row', (select count(*) = 1 from public.organization_members);
+insert into external_results select 'Client sees only assigned shared project', (select count(*) = 1 from public.projects) and public.can_read_project((select project_id from external_projects where label = 'shared'), (select organization_id from external_orgs)) and not public.can_read_project((select project_id from external_projects where label = 'internal'), (select organization_id from external_orgs));
+insert into external_results select 'Client sees only client-visible task', (select count(*) = 1 from public.tasks) and exists (select 1 from public.tasks where visibility = 'client_visible');
+insert into external_results select 'Client sees only approved shared file', (select count(*) = 1 from public.files) and exists (select 1 from public.files where review_status = 'approved' and confidentiality = 'client_shared');
+insert into external_results select 'Client has no internal role', not public.has_org_role((select organization_id from external_orgs), array['owner','admin','manager','sales','contributor','auditor']);
+select * from external_results order by check_name;
+rollback;
