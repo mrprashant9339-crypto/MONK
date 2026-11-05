@@ -1,0 +1,28 @@
+{
+  "name": "monk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MONK — a calm business operating ecosystem for service teams",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@monk/web",
+    "build": "npm run build --workspace=@monk/web",
+    "start": "npm run start --workspace=@monk/web",
+    "lint": "npm run lint --workspace=@monk/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.3",
+    "vitest": "3.2.4"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
